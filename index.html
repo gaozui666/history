@@ -1,0 +1,608 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>合成苏维埃</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            user-select: none;
+        }
+        body {
+            background: #1a1a22;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            padding: 12px;
+            color: #fff;
+            font-family: system-ui, -apple-system, sans-serif;
+        }
+        .game-wrapper {
+            background: #1f1f2b;
+            border-radius: 28px;
+            padding: 16px 16px 20px;
+            box-shadow: 0 12px 30px rgba(0,0,0,0.7);
+            max-width: 420px;
+            width: 100%;
+        }
+        #gameCanvas {
+            display: block;
+            width: 100%;
+            height: auto;
+            aspect-ratio: 360 / 640;
+            border-radius: 18px;
+            background: #272733;
+            box-shadow: inset 0 0 0 2px #3d3d4a;
+            touch-action: none;
+            cursor: crosshair;
+        }
+        .info {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+            font-size: 14px;
+            background: #2a2a36;
+            padding: 8px 14px;
+            border-radius: 60px;
+            width: 100%;
+            color: #cdd0e6;
+        }
+        .info span {
+            background: #3a3a4a;
+            padding: 2px 12px;
+            border-radius: 30px;
+            font-weight: 600;
+            color: #f0e68c;
+        }
+        #restartBtn {
+            margin-top: 14px;
+            padding: 10px 28px;
+            font-size: 17px;
+            font-weight: 600;
+            background: #d4a373;
+            border: none;
+            border-radius: 60px;
+            color: #1a1a22;
+            cursor: pointer;
+            transition: 0.2s;
+            box-shadow: 0 4px 0 #8b6b4b;
+            letter-spacing: 1px;
+            display: none;
+        }
+        #restartBtn:hover {
+            background: #e6b98a;
+            transform: translateY(-2px);
+            box-shadow: 0 6px 0 #8b6b4b;
+        }
+        #restartBtn:active {
+            transform: translateY(4px);
+            box-shadow: 0 1px 0 #8b6b4b;
+        }
+        .footer {
+            display: flex;
+            justify-content: center;
+            width: 100%;
+        }
+        .badge {
+            margin-top: 8px;
+            font-size: 12px;
+            color: #6a6a7a;
+        }
+        @media (max-width: 480px) {
+            .info { font-size: 12px; padding: 6px 12px; }
+        }
+    </style>
+</head>
+<body>
+<div class="game-wrapper">
+    <div class="info">
+        <span>⚡ 合成苏维埃</span>
+        <span id="levelHint">点击投放</span>
+    </div>
+    <canvas id="gameCanvas" width="360" height="640"></canvas>
+    <div class="footer">
+        <button id="restartBtn">🔄 重新开始</button>
+    </div>
+    <div class="badge">⚡ 相同球碰撞合并 · 目标：苏联球</div>
+</div>
+<script>
+    (function(){
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const restartBtn = document.getElementById('restartBtn');
+        const levelHint = document.getElementById('levelHint');
+
+        // ---------- 级别定义 ----------
+        const levels = [
+            { name:"波兰", type:"stripe-v", colors:["#DC143C","#FFFFFF"], r:22 },
+            { name:"日本", type:"japan", r:26 },
+            { name:"意大利", type:"stripe-v", colors:["#009246","#F4F5F0","#CE2B37"], r:30 },
+            { name:"印度", type:"stripe-h", colors:["#FF9933","#FFFFFF","#138808"], r:34 },
+            { name:"德国", type:"stripe-h", colors:["#000000","#DD0000","#FFCE00"], r:38 },
+            { name:"英国", type:"uk", r:42 },
+            { name:"法国", type:"stripe-v", colors:["#0055A4","#FFFFFF","#EF4135"], r:46 },
+            { name:"欧盟", type:"eu", r:50 },
+            { name:"俄罗斯", type:"stripe-h", colors:["#FFFFFF","#0039A6","#D52B1E"], r:54 },
+            { name:"美国", type:"us", r:58 },
+            { name:"中国", type:"cn", r:64 },
+            { name:"苏联", type:"stripe-h", colors:["#CC0000","#FFD700"], r:72 }
+        ];
+
+        // ---------- 物理常量 ----------
+        const GRAVITY = 0.28;
+        const BOUNCE = 0.35;
+        const FRICTION = 0.992;
+        const TOP_LIMIT = 80;
+
+        // ---------- 状态 ----------
+        let balls = [];
+        let nextLevel = 0;
+        let dropX = canvas.width / 2;
+        let gameOver = false;
+        let win = false;
+        let particles = [];
+        let popEffects = [];
+
+        // ---------- 球类 ----------
+        class Ball {
+            constructor(lv, x, y) {
+                this.lv = lv;
+                this.x = x;
+                this.y = y;
+                this.r = levels[lv].r;
+                this.vx = 0;
+                this.vy = 0;
+                this.justSpawn = true;
+                this.rotation = 0;
+                this.angularVelocity = 0.015;
+            }
+
+            update() {
+                this.vy += GRAVITY;
+                this.x += this.vx;
+                this.y += this.vy;
+                this.vx *= FRICTION;
+
+                // 自旋
+                this.angularVelocity += this.vx * 0.008;
+                this.angularVelocity *= 0.985;
+                if (Math.abs(this.angularVelocity) < 0.008 && Math.abs(this.vx) < 0.15) {
+                    this.angularVelocity = 0.015;
+                }
+                this.rotation += this.angularVelocity;
+
+                if (this.y > 120) this.justSpawn = false;
+
+                // 边界碰撞
+                if (this.x - this.r < 0) {
+                    this.x = this.r;
+                    this.vx *= -BOUNCE;
+                }
+                if (this.x + this.r > canvas.width) {
+                    this.x = canvas.width - this.r;
+                    this.vx *= -BOUNCE;
+                }
+                if (this.y + this.r > canvas.height) {
+                    this.y = canvas.height - this.r;
+                    this.vy *= -BOUNCE;
+                    this.vx *= 0.92;
+                    this.angularVelocity *= 0.96;
+                }
+            }
+
+            draw() {
+                const lvCfg = levels[this.lv];
+                ctx.save();
+                ctx.translate(this.x, this.y);
+                ctx.rotate(this.rotation);
+                ctx.beginPath();
+                ctx.arc(0, 0, this.r, 0, Math.PI * 2);
+                ctx.clip();
+
+                // ---- 绘制各国旗帜 ----
+                if (lvCfg.type === "japan") {
+                    ctx.fillStyle = "#FFFFFF";
+                    ctx.fillRect(-this.r, -this.r, this.r * 2, this.r * 2);
+                    ctx.fillStyle = "#BC002D";
+                    ctx.beginPath();
+                    ctx.arc(0, 0, this.r * 0.4, 0, Math.PI * 2);
+                    ctx.fill();
+                } else if (lvCfg.type === "uk") {
+                    ctx.fillStyle = "#00247D";
+                    ctx.fillRect(-this.r, -this.r, this.r * 2, this.r * 2);
+                    ctx.strokeStyle = "#ffffff";
+                    ctx.lineWidth = this.r * 0.22;
+                    ctx.beginPath();
+                    ctx.moveTo(-this.r, -this.r);
+                    ctx.lineTo(this.r, this.r);
+                    ctx.moveTo(this.r, -this.r);
+                    ctx.lineTo(-this.r, this.r);
+                    ctx.stroke();
+                    ctx.strokeStyle = "#CF142B";
+                    ctx.lineWidth = this.r * 0.12;
+                    ctx.beginPath();
+                    ctx.moveTo(-this.r, -this.r);
+                    ctx.lineTo(this.r, this.r);
+                    ctx.moveTo(this.r, -this.r);
+                    ctx.lineTo(-this.r, this.r);
+                    ctx.stroke();
+                    ctx.strokeStyle = "#ffffff";
+                    ctx.lineWidth = this.r * 0.24;
+                    ctx.beginPath();
+                    ctx.moveTo(-this.r, 0);
+                    ctx.lineTo(this.r, 0);
+                    ctx.moveTo(0, -this.r);
+                    ctx.lineTo(0, this.r);
+                    ctx.stroke();
+                    ctx.strokeStyle = "#CF142B";
+                    ctx.lineWidth = this.r * 0.13;
+                    ctx.beginPath();
+                    ctx.moveTo(-this.r, 0);
+                    ctx.lineTo(this.r, 0);
+                    ctx.moveTo(0, -this.r);
+                    ctx.lineTo(0, this.r);
+                    ctx.stroke();
+                } else if (lvCfg.type === "eu") {
+                    ctx.fillStyle = "#003399";
+                    ctx.fillRect(-this.r, -this.r, this.r * 2, this.r * 2);
+                    const starCount = 12;
+                    for (let i = 0; i < starCount; i++) {
+                        const ang = Math.PI * 2 / starCount * i;
+                        const sx = Math.cos(ang) * this.r * 0.62;
+                        const sy = Math.sin(ang) * this.r * 0.62;
+                        ctx.fillStyle = "#FFCC00";
+                        drawStar(sx, sy, 5, this.r * 0.09, this.r * 0.04);
+                    }
+                } else if (lvCfg.type === "cn") {
+                    ctx.fillStyle = "#DE2910";
+                    ctx.fillRect(-this.r, -this.r, this.r * 2, this.r * 2);
+                    ctx.fillStyle = "#FFDE00";
+                    drawStar(-this.r * 0.62, -this.r * 0.52, 5, this.r * 0.22, this.r * 0.11);
+                    drawStar(-this.r * 0.32, -this.r * 0.70, 5, this.r * 0.09, this.r * 0.045);
+                    drawStar(-this.r * 0.18, -this.r * 0.54, 5, this.r * 0.09, this.r * 0.045);
+                    drawStar(-this.r * 0.18, -this.r * 0.34, 5, this.r * 0.09, this.r * 0.045);
+                    drawStar(-this.r * 0.32, -this.r * 0.20, 5, this.r * 0.09, this.r * 0.045);
+                } else if (lvCfg.type === "us") {
+                    const h2 = this.r * 2;
+                    const stripeH = h2 / 13;
+                    for (let i = 0; i < 13; i++) {
+                        ctx.fillStyle = i % 2 === 0 ? "#B22234" : "#FFFFFF";
+                        ctx.fillRect(-this.r, -this.r + i * stripeH, this.r * 2, stripeH);
+                    }
+                    const blueW = this.r * 0.95;
+                    const blueH = h2 * 7 / 13;
+                    ctx.fillStyle = "#3C3B6E";
+                    ctx.fillRect(-this.r, -this.r, blueW, blueH);
+                    const starRows = 5;
+                    const starCols = 6;
+                    const starSize = this.r * 0.065;
+                    const gapX = blueW / (starCols + 1);
+                    const gapY = blueH / (starRows + 1);
+                    ctx.fillStyle = "#FFFFFF";
+                    for (let row = 0; row < starRows; row++) {
+                        for (let col = 0; col < starCols; col++) {
+                            const sx = -this.r + gapX * (col + 1);
+                            const sy = -this.r + gapY * (row + 1);
+                            drawStar(sx, sy, 5, starSize, starSize * 0.45);
+                        }
+                    }
+                } else if (lvCfg.type === "stripe-h") {
+                    const h = this.r * 2;
+                    const sliceH = h / lvCfg.colors.length;
+                    for (let i = 0; i < lvCfg.colors.length; i++) {
+                        ctx.fillStyle = lvCfg.colors[i];
+                        ctx.fillRect(-this.r, -this.r + i * sliceH, this.r * 2, sliceH);
+                    }
+                } else if (lvCfg.type === "stripe-v") {
+                    const w = this.r * 2;
+                    const sliceW = w / lvCfg.colors.length;
+                    for (let i = 0; i < lvCfg.colors.length; i++) {
+                        ctx.fillStyle = lvCfg.colors[i];
+                        ctx.fillRect(-this.r + i * sliceW, -this.r, sliceW, this.r * 2);
+                    }
+                }
+
+                ctx.restore();
+
+                // 描边 & 高光
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.r, 0, Math.PI * 2);
+                ctx.strokeStyle = "rgba(0,0,0,0.3)";
+                ctx.lineWidth = 2.5;
+                ctx.stroke();
+
+                const gradient = ctx.createRadialGradient(
+                    this.x - this.r * 0.3, this.y - this.r * 0.3, 0,
+                    this.x, this.y, this.r
+                );
+                gradient.addColorStop(0, "rgba(255,255,255,0.3)");
+                gradient.addColorStop(0.7, "rgba(255,255,255,0.05)");
+                gradient.addColorStop(1, "rgba(0,0,0,0.15)");
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.r, 0, Math.PI * 2);
+                ctx.fillStyle = gradient;
+                ctx.fill();
+            }
+        }
+
+        // 绘制五角星
+        function drawStar(cx, cy, spikes, outerRadius, innerRadius) {
+            let rot = Math.PI / 2 * 3;
+            ctx.beginPath();
+            ctx.moveTo(cx, cy - outerRadius);
+            for (let i = 0; i < spikes; i++) {
+                let x = cx + Math.cos(rot) * outerRadius;
+                let y = cy + Math.sin(rot) * outerRadius;
+                ctx.lineTo(x, y);
+                rot += Math.PI / spikes;
+                x = cx + Math.cos(rot) * innerRadius;
+                y = cy + Math.sin(rot) * innerRadius;
+                ctx.lineTo(x, y);
+                rot += Math.PI / spikes;
+            }
+            ctx.lineTo(cx, cy - outerRadius);
+            ctx.closePath();
+            ctx.fill();
+        }
+
+        // ---------- 特效 ----------
+        function createMergeEffect(x, y, color) {
+            for (let i = 0; i < 14; i++) {
+                const angle = (Math.PI * 2 / 14) * i + Math.random() * 0.3;
+                particles.push({
+                    x, y,
+                    vx: Math.cos(angle) * (3 + Math.random() * 4),
+                    vy: Math.sin(angle) * (3 + Math.random() * 4),
+                    life: 1,
+                    color: color,
+                    size: 5 + Math.random() * 5
+                });
+            }
+            popEffects.push({
+                x, y,
+                r: 8,
+                maxR: 80 + Math.random() * 30,
+                life: 1,
+                color: color
+            });
+        }
+
+        function updateEffects() {
+            for (let i = particles.length - 1; i >= 0; i--) {
+                const p = particles[i];
+                p.x += p.vx;
+                p.y += p.vy;
+                p.vy += 0.12;
+                p.life -= 0.025;
+                p.size *= 0.97;
+                if (p.life <= 0) particles.splice(i, 1);
+            }
+            for (let i = popEffects.length - 1; i >= 0; i--) {
+                const e = popEffects[i];
+                e.r += 4.5;
+                e.life -= 0.035;
+                if (e.life <= 0) popEffects.splice(i, 1);
+            }
+        }
+
+        function drawEffects() {
+            for (const e of popEffects) {
+                ctx.beginPath();
+                ctx.arc(e.x, e.y, e.r, 0, Math.PI * 2);
+                ctx.strokeStyle = `rgba(255,240,180,${e.life * 0.8})`;
+                ctx.lineWidth = 3.5;
+                ctx.stroke();
+            }
+            for (const p of particles) {
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+                ctx.fillStyle = p.color;
+                ctx.globalAlpha = p.life * 0.9;
+                ctx.fill();
+                ctx.globalAlpha = 1;
+            }
+        }
+
+        // ---------- 碰撞与合成 ----------
+        function checkCollide() {
+            for (let i = 0; i < balls.length; i++) {
+                for (let j = i + 1; j < balls.length; j++) {
+                    const a = balls[i];
+                    const b = balls[j];
+                    const dx = a.x - b.x;
+                    const dy = a.y - b.y;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+                    const minDist = a.r + b.r;
+
+                    if (dist < minDist && dist > 0.001) {
+                        const overlap = minDist - dist;
+                        const nx = dx / dist;
+                        const ny = dy / dist;
+
+                        a.x += nx * overlap * 0.5;
+                        b.x -= nx * overlap * 0.5;
+                        a.y += ny * overlap * 0.5;
+                        b.y -= ny * overlap * 0.5;
+
+                        const push = 0.6;
+                        a.vx += nx * push;
+                        b.vx -= nx * push;
+                        a.vy += ny * push;
+                        b.vy -= ny * push;
+
+                        a.angularVelocity += (b.vx - a.vx) * 0.006;
+                        b.angularVelocity += (a.vx - b.vx) * 0.006;
+
+                        // 同级别合并
+                        if (a.lv === b.lv && a.lv + 1 < levels.length) {
+                            const newLv = a.lv + 1;
+                            const nx2 = (a.x + b.x) / 2;
+                            const ny2 = (a.y + b.y) / 2;
+
+                            createMergeEffect(nx2, ny2, "#f5e56b");
+
+                            // 移除两个球
+                            balls.splice(j, 1);
+                            balls.splice(i, 1);
+
+                            // 创建新球
+                            const newBall = new Ball(newLv, nx2, ny2);
+                            newBall.vy = -5.5;
+                            newBall.vx = (a.vx + b.vx) * 0.5;
+                            balls.push(newBall);
+
+                            // 胜利判定
+                            if (newLv === levels.length - 1) {
+                                win = true;
+                            }
+                            return; // 一次只处理一次合并
+                        }
+                    }
+                }
+            }
+        }
+
+        // ---------- 生成球 ----------
+        function spawnBall(x) {
+            if (gameOver || win) return;
+            if (nextLevel >= levels.length) nextLevel = 0;
+            const ball = new Ball(nextLevel, x, 40);
+            balls.push(ball);
+            nextLevel = Math.floor(Math.random() * 3);
+            levelHint.innerText = `下一个: ${levels[nextLevel].name}`;
+        }
+
+        // ---------- 重置 ----------
+        function resetGame() {
+            balls = [];
+            nextLevel = 0;
+            dropX = canvas.width / 2;
+            gameOver = false;
+            win = false;
+            particles = [];
+            popEffects = [];
+            restartBtn.style.display = "none";
+            levelHint.innerText = `下一个: ${levels[0].name}`;
+        }
+
+        // ---------- 事件绑定 ----------
+        canvas.addEventListener("mousemove", (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const scaleX = canvas.width / rect.width;
+            dropX = (e.clientX - rect.left) * scaleX;
+            dropX = Math.min(Math.max(dropX, 20), canvas.width - 20);
+        });
+
+        canvas.addEventListener("click", (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const scaleX = canvas.width / rect.width;
+            const x = (e.clientX - rect.left) * scaleX;
+            spawnBall(Math.min(Math.max(x, 20), canvas.width - 20));
+        });
+
+        canvas.addEventListener("touchmove", (e) => {
+            e.preventDefault();
+            const rect = canvas.getBoundingClientRect();
+            const scaleX = canvas.width / rect.width;
+            const touch = e.touches[0];
+            if (touch) {
+                dropX = (touch.clientX - rect.left) * scaleX;
+                dropX = Math.min(Math.max(dropX, 20), canvas.width - 20);
+            }
+        }, { passive: false });
+
+        canvas.addEventListener("touchstart", (e) => {
+            e.preventDefault();
+            const rect = canvas.getBoundingClientRect();
+            const scaleX = canvas.width / rect.width;
+            const touch = e.touches[0];
+            if (touch) {
+                const x = (touch.clientX - rect.left) * scaleX;
+                spawnBall(Math.min(Math.max(x, 20), canvas.width - 20));
+            }
+        }, { passive: false });
+
+        restartBtn.onclick = resetGame;
+
+        // ---------- 主循环 ----------
+        function loop() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // 顶部警戒线
+            ctx.strokeStyle = "#ff6b6b";
+            ctx.lineWidth = 2;
+            ctx.setLineDash([6, 6]);
+            ctx.beginPath();
+            ctx.moveTo(0, TOP_LIMIT);
+            ctx.lineTo(canvas.width, TOP_LIMIT);
+            ctx.stroke();
+            ctx.setLineDash([]);
+
+            // 更新 & 检测 GameOver
+            for (const b of balls) {
+                if (!b.justSpawn && b.y - b.r < TOP_LIMIT) {
+                    gameOver = true;
+                    restartBtn.style.display = "block";
+                    break;
+                }
+            }
+
+            // 预览下一个球
+            if (!gameOver && !win) {
+                ctx.globalAlpha = 0.45;
+                const preview = new Ball(nextLevel, dropX, 40);
+                preview.draw();
+                ctx.globalAlpha = 1;
+            }
+
+            // 物理更新
+            for (const b of balls) b.update();
+
+            // 碰撞 & 合成
+            checkCollide();
+
+            // 特效更新
+            updateEffects();
+
+            // 绘制所有球
+            for (const b of balls) b.draw();
+
+            // 绘制特效
+            drawEffects();
+
+            // 胜利/结束文字
+            ctx.font = "bold 24px system-ui, sans-serif";
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            if (win) {
+                ctx.shadowColor = "#ffdd44";
+                ctx.shadowBlur = 20;
+                ctx.fillStyle = "#ffdd44";
+                ctx.fillText("🎉 合成苏联！胜利！", canvas.width / 2, canvas.height / 2 - 30);
+                ctx.shadowBlur = 0;
+                restartBtn.style.display = "block";
+            } else if (gameOver) {
+                ctx.fillStyle = "#ff6b6b";
+                ctx.fillText("💥 游戏结束", canvas.width / 2, canvas.height / 2 - 20);
+                ctx.font = "16px system-ui";
+                ctx.fillStyle = "#ccd0e6";
+                ctx.fillText("点击下方按钮重新开始", canvas.width / 2, canvas.height / 2 + 30);
+            }
+
+            requestAnimationFrame(loop);
+        }
+
+        // 初始化提示
+        levelHint.innerText = `下一个: ${levels[0].name}`;
+        resetGame();
+        loop();
+    })();
+</script>
+</body>
+</html>
